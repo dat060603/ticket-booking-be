@@ -83,4 +83,5 @@ env_310/
 *.dat
 __pycache__/
 db.sqlite3
+*.log
 .env
