@@ -4,7 +4,8 @@ from django.conf import settings
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-
+from django.utils import timezone
+import json
 # Cố định CHROMA_PATH trong thư mục chatbot
 CHROMA_PATH = os.path.join(settings.BASE_DIR, "apps", "chatbot", "chroma_index")
 
@@ -55,7 +56,12 @@ def build_chroma_index():
 
     # Lấy dữ liệu từ DB
     try:
-        matches = Match.objects.select_related("team_1", "team_2", "league")
+        now = timezone.now()
+        matches = (
+            Match.objects.filter(match_time__gt=now)
+            .select_related("team_1", "team_2", "league")
+            .order_by("match_time")
+        )
     except Exception as e:
         print(f"⚠️ Lỗi khi query Match: {e}")
         return
@@ -73,16 +79,17 @@ def build_chroma_index():
             league_name = m.league.league_name if m.league else "Giải không xác định"
             sport_type = m.league.sport.sport_name if m.league and m.league.sport else "Thể thao"
 
-            # Duyệt qua từng khu vực trong sân
+            # Duyệt qua từng khu vực trong sân, gom các khu vực vào một list cho mỗi trận
             section_prices = SectionPrice.objects.filter(match=m, is_closed=0).select_related("section")
-            
+
+            sections_list = []
             for sp in section_prices:
                 section = sp.section.section_name if sp.section else "Khu vực không xác định"
                 price = int(sp.price) if sp.price else 0
                 seats = sp.available_seats if sp.available_seats else 0
 
                 # Xác định trạng thái vé
-                status = "còn vé" if seats > 0  else "hết vé"
+                status = "còn vé" if seats > 0 else "hết vé"
 
                 # Kiểm tra khuyến mãi
                 promo_text = ""
@@ -94,23 +101,39 @@ def build_chroma_index():
                     if promo_detail and promo_detail.promo:
                         promo = promo_detail.promo
                         if promo.discount_type == "percentage":
-                            promo_text = f", khuyến mãi {promo.promo_code}: giảm {promo.discount_value}%"
+                            promo_text = f"khuyến mãi {promo.promo_code}: giảm {promo.discount_value}%"
                         else:
-                            promo_text = f", khuyến mãi {promo.promo_code}: giảm {int(promo.discount_value):,}đ"
+                            promo_text = f"khuyến mãi {promo.promo_code}: giảm {int(promo.discount_value):,}đ"
                 except Exception as e:
                     print(f"⚠️ Lỗi khi query promotion: {e}")
 
-                # Text mô tả đầy đủ
-                text = (
-                    f"match_id {match_id}, "
-                    f"Giải {league_name} ({sport_type}), "
-                    f"Trận {match_name}, Thời gian {match_time}, "
-                    f"Khu vực {section}, giá {price:,}đ, {status}{promo_text}, còn {seats} chỗ."
-                )
+                # Thêm entry theo định dạng dict có tiêu đề
+                sections_list.append({
+                    "khu_vuc": section,
+                    "gia": price,
+                    "trang_thai": status,
+                    "khuyen_mai": promo_text,
+                    "chỗ trống": seats
+                })
 
-                docs.append(
-                    Document(page_content=text, metadata={"match_id": match_id})
-                )
+            if not sections_list:
+                # bỏ qua trận nếu không có khu vực hợp lệ
+                continue
+
+            # Text mô tả ngắn cho match (không lặp từng khu vực)
+            text = (
+                f"match_id {match_id}, Giải {league_name} ({sport_type}), Trận {match_name}, Thời gian {match_time}."
+            )
+            docs.append(
+    Document(
+        page_content=text, 
+        metadata={
+            "match_id": match_id, 
+            "sections": json.dumps(sections_list, ensure_ascii=False)
+        }      
+    )
+)
+            print(docs);
         except Exception as e:
             print(f"⚠️ Lỗi xử lý match: {e}")
             continue
@@ -144,7 +167,24 @@ def search_chroma(user_message: str, k: int = 3):
             return None
 
         top_match_id = results[0].metadata.get("match_id")
-        context_text = "\n".join([r.page_content for r in results])
+        
+        formatted_results = []
+        for r in results:
+            page_content = r.page_content
+            metadata = r.metadata
+            sections_json = metadata.get("sections")
+            
+            sections_info = ""
+            if sections_json:
+                try:
+                    sections_list = json.loads(sections_json)
+                    sections_info = f"\n{sections_json}"
+                except json.JSONDecodeError:
+                    print(f"⚠️ Lỗi giải mã JSON cho sections: {sections_json}")
+            
+            formatted_results.append(f"{page_content}\nChi tiết vé:\n{sections_info}")
+
+        context_text = "\n\n".join(formatted_results)
 
         print(f"✅ Tìm thấy {len(results)} kết quả liên quan.")
         return context_text, top_match_id

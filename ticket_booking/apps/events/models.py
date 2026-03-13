@@ -242,60 +242,62 @@ class Match(models.Model):
         super().save(*args, **kwargs)
 
     def calculate_hotness(self):
+        # 1. Logic cơ bản dựa trên Rating (Tính nền tảng trước)
         if not self.team_1 or not self.team_2:
             return
 
         r1 = self.team_1.rating
         r2 = self.team_2.rating
-        
         total = r1 + r2
         diff = abs(r1 - r2)
-
-        # --- LEVEL 5: SUPER HOT (ĐẠI CHIẾN) ---
-        # Hai đội đều mạnh (Tổng >= 17) HOẶC Derby
-        # VD: Man City (10) + Liverpool (9) = 19
+        
+        # --- BƯỚC 1: TÍNH TOÁN DỰA TRÊN CHUYÊN MÔN (RATING) ---
         if total >= 17:
             self.is_hot_match = True
             self.importance = 5
-            return
-
-        # --- LEVEL 4: HOT (TRẬN CẦU ĐINH) ---
-        # Hai đội khá gặp nhau (Tổng >= 14)
-        # VD: Tottenham (8) + West Ham (6) = 14
-        if total >= 15:
+        elif total >= 15:
             self.is_hot_match = False
             self.importance = 4
-            return
-
-        # --- LEVEL 2: ONE-SIDED (CHÊNH LỆCH / ĐÁ TẬP) ---
-        # Một đội quá mạnh đá với đội quá yếu -> Kém hấp dẫn về mặt cạnh tranh
-        # VD: Man City (10) vs Sheffield (3) -> Diff = 7
-        if diff >= 5:
+        elif diff >= 5: # Chênh lệch quá lớn
             self.is_hot_match = False
+            self.importance = 4 if max(r1, r2) >= 9 else (3 if max(r1, r2) >= 7 else 2)
+        elif total <= 8:
+            self.is_hot_match = False
+            self.importance = 1
+        else:
+            self.is_hot_match = False
+            self.importance = 3
+
+        # --- BƯỚC 2: LOGIC "TỪ KHÓA ĐẶC BIỆT" (OVERRIDE) ---
+        # Đây là cách giải quyết Derby mà không cần sửa Model Team
+        # Nếu mô tả trận đấu chứa các từ khóa nhạy cảm -> Tự động kích hoạt HOT
+        
+        if self.description:
+            desc_lower = self.description.lower()
             
-            # --- LOGIC MỚI: BẢO KÊ NGÔI SAO ---
-            # Nếu có một đội Rating 9 hoặc 10 (Man City, Liverpool...)
-            # Thì khán giả vẫn đến xem đông -> Importance không được quá thấp
-            if max(r1, r2) >= 9:
-                self.importance = 4 # Vẫn khá quan trọng (Xem sao thi đấu)
-            elif max(r1, r2) >= 7:
-                self.importance = 3 # Trung bình
-            else:
-                self.importance = 2 # Hai đội yếu/trung bình đá nhau -> Mới thực sự là ế
-            return
+            # Danh sách từ khóa báo hiệu trận HOT (Hỗ trợ nhiều môn, nhiều ngôn ngữ)
+            HOT_KEYWORDS = [
+                'derby',          # Bóng đá
+                'chung kết', 'final', # Trận quan trọng
+                'bán kết', 'semi-final',
+                'siêu kinh điển', 'el clasico', 
+                'đại chiến', 'big match',
+                'kình địch', 'rivalry',
+                'all-star',       # Bóng rổ
+                'playoff', 'play-off'
+            ]
 
-        # --- LEVEL 1: LOW TIER (CHUNG KẾT NGƯỢC) ---
-        # Hai đội yếu gặp nhau -> Ít người quan tâm
-        # VD: Burnley (3) + Luton (3) = 6
-        if total <= 8:
-            self.is_hot_match = False
-            self.importance = 1 # Giá vé phải rẻ nhất
-            return
-
-        # --- LEVEL 3: AVERAGE (CÒN LẠI) ---
-        # Các trận trung bình giữa bảng
-        self.is_hot_match = False
-        self.importance = 3
+            # Nếu tìm thấy bất kỳ từ khóa nào trong mô tả
+            if any(keyword in desc_lower for keyword in HOT_KEYWORDS):
+                self.is_hot_match = True
+                # Đã là Derby/Chung kết thì Importance ít nhất phải là 4
+                if self.importance < 4:
+                    self.importance = 4
+                
+                # Nếu vốn dĩ rating cao (4) thì đẩy lên max (5)
+                if self.importance == 4:
+                    self.importance = 5
+    
 
 # --- KHÔNG ĐỔI: Model MatchHistory (Đã đủ linh hoạt) ---
 class MatchHistory(models.Model):

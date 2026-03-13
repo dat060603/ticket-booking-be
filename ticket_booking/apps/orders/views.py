@@ -335,7 +335,70 @@ class MoMoPaymentAPIView(APIView):
             return Response(payment_data, status=status.HTTP_200_OK)
         
         return Response({"error": "Payment request failed"}, status=status.HTTP_400_BAD_REQUEST)
-    
+
+# Phần giả lậop thanh toán không momo
+# import time
+# from rest_framework.views import APIView
+# from rest_framework.response import Response
+# from rest_framework import status
+# from django.utils import timezone
+# from datetime import timedelta
+# from .models import Order, Payment 
+
+# class MoMoPaymentAPIView(APIView):
+#     def post(self, request):
+#         print("\n---------- ⚠️ CHẾ ĐỘ GIẢ LẬP THANH TOÁN (BYPASS MOMO) ----------")
+        
+#         # 1. Lấy dữ liệu từ Frontend gửi lên
+#         order_id = request.data.get('order')
+        
+#         # Frontend đã gửi sẵn link trang đích (qrcode.html) trong biến này
+#         # Code JS: redirect_url: window.location.origin + '/pages/customer/qrcode.html'
+#         frontend_redirect_url = request.data.get('redirect_url') 
+        
+#         try:
+#             # 2. XỬ LÝ DATABASE NGAY LẬP TỨC (Update thành công luôn)
+#             order = Order.objects.get(order_id=order_id)
+            
+#             # 2.1. Tạo bản ghi Payment thành công
+#             expiration_time = timezone.now() + timedelta(minutes=10)
+#             fake_trans_id = f"MOCK_{int(time.time())}"
+            
+#             Payment.objects.create(
+#                 order=order,
+#                 payment_method='transfer',   # Hoặc 'momo'
+#                 payment_status='success',    # <--- QUAN TRỌNG: success/completed
+#                 transaction_code=fake_trans_id,
+#                 expiration_time=expiration_time,
+#             )
+
+#             # 2.2. Cập nhật trạng thái đơn hàng
+#             # Dựa vào code cũ (MoMoIPNAPIView), bạn dùng trạng thái 'received'
+#             order.order_status = 'received' 
+#             order.save()
+            
+#             print(f"✅ Đã giả lập thanh toán thành công cho đơn: {order_id}")
+
+#             # 3. TẠO LINK GIẢ LẬP ĐỂ TRẢ VỀ FRONTEND
+#             # Thay vì trả về link MoMo, ta trả về link trang qrcode.html kèm tham số thành công
+#             # Frontend sẽ chạy dòng: window.location.href = mock_url -> Nhảy trang luôn
+            
+#             mock_url = f"{frontend_redirect_url}?resultCode=0&orderId={order_id}&message=GiaoDichThanhCong"
+
+#             return Response({
+#                 'payUrl': mock_url,  # Frontend chỉ cần biến này để redirect
+#                 'message': 'Giả lập thanh toán thành công'
+#             }, status=status.HTTP_200_OK)
+
+#         except Order.DoesNotExist:
+#             return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+#         except Exception as e:
+#             print("❌ Lỗi Server:", str(e))
+#             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
 
 class MoMoIPNAPIView(APIView):
     def post(self, request):

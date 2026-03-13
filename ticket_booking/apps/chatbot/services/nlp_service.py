@@ -3,6 +3,7 @@ from django.conf import settings
 from openai import OpenAI
 from apps.chatbot.models import ChatHistory
 from ticket_booking.settings import FRONTEND_URL
+from django.utils import timezone
 # Cấu hình OpenAI/Groq client từ Django settings (lazy init)
 import threading
 
@@ -52,10 +53,12 @@ def generate_ai_response(user_message: str, customer=None, session_id=None, cont
         system_prompt = (
             "Bạn là chatbot hỗ trợ khách hàng đặt vé thể thao. "
             "Trả lời thân thiện, dễ hiểu và chỉ dựa trên dữ liệu thật bên dưới. "
+            "trả lời ngắn gọn không dài dòng. "
+            "Nếu cùng một match_id thì không lặp lại nhắc đến match_name mà nói cái khác biệt."
         )
         
         if top_match_id:
-            system_prompt += f"Nếu có thể, hãy chèn đường dẫn đến trang đặt vé dạng {FRONTEND_URL}/match/match_id khi người dùng có ý định đặt, mua, hoặc xem chi tiết vé. Nếu người dùng muốn đặt mua thì chèn đường dẫn vô "
+            system_prompt += f"Nếu có thể, hãy chèn đường dẫn đến trang đặt vé dạng {FRONTEND_URL}/match/match_id khi người dùng có ý định đặt, mua, hoặc xem chi tiết vé. Nếu người dùng muốn đặt mua thì chèn đường dẫn vô, không nên có 2 link giống nhau nhé,nếu giống thì lấy 1 thôi"
         
         system_prompt += "Không bịa ra thông tin ngoài dữ liệu thật.\n\n"
 
@@ -109,6 +112,8 @@ def rewrite_query_with_context(user_message: str, session_id: str = None) -> str
         return user_message
     
     try:
+        now = timezone.now()
+        current_date_info = now.strftime("%A, ngày %d/%m/%Y") # Ví dụ: Wednesday, ngày 24/12/2025
         # Lấy lịch sử hội thoại gần nhất (3 lượt gần đây)
         history_text = ""
         if session_id:
@@ -121,7 +126,12 @@ def rewrite_query_with_context(user_message: str, session_id: str = None) -> str
             messages=[
                 {
                     "role": "system",
-                    "content": "Bạn là trợ lý giúp diễn giải câu hỏi người dùng sao cho có đầy đủ ngữ cảnh. Không trả lời, chỉ viết lại câu hỏi hoàn chỉnh."
+                    "content": (
+                        f"Bạn là trợ lý giúp diễn giải câu hỏi người dùng sao cho có đầy đủ ngữ cảnh. "
+                        f"Hôm nay là {current_date_info}. "
+                        "Nếu người dùng hỏi về 'hôm nay', 'mai', 'thứ mấy', hãy chuyển chúng thành ngày cụ thể (dd/mm/yyyy). "
+                        "Chỉ viết lại câu hỏi hoàn chỉnh, không trả lời câu hỏi."
+                    )
                 },
                 {
                     "role": "user",

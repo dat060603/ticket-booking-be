@@ -384,11 +384,15 @@ class MatchSectionPricesAPIView(APIView):
 #         except SectionPrice.DoesNotExist:
 #             return Response({"error": "Không tìm thấy thông tin giá vé."}, status=status.HTTP_404_NOT_FOUND)
 # AI GIÁ
+
+
+# AI 2
 import joblib
 import os
 import numpy as np
 from django.utils import timezone
 from django.conf import settings
+from django.db.models import Sum # Đạt nhớ thêm import Sum nhé
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -399,7 +403,10 @@ from apps.events.models import Match
 class SuggestOptimalPriceView(APIView):
     """
     API Đề xuất giá vé tối ưu (AI Dynamic Pricing).
-    Logic: Cân bằng giữa Doanh thu (70%) và Tỷ lệ lấp đầy (30%).
+    Logic: 
+    1. Dự báo nhu cầu bằng Random Forest (Ensemble).
+    2. Đo lường độ tin cậy bằng độ lệch chuẩn giữa các cây (Standard Deviation).
+    3. Cân bằng giữa Doanh thu (70%) và Tỷ lệ lấp đầy (30%).
     """
     def post(self, request):
         try:
@@ -430,39 +437,62 @@ class SuggestOptimalPriceView(APIView):
             MAX_CAPACITY = real_capacity if real_capacity > 0 else (match.stadium.capacity or 500)
 
             # 4. Load Model AI
+            # LƯU Ý: Đảm bảo tên file model khớp với file bạn vừa train (có thể là _1.pkl)
             model_path = os.path.join(settings.BASE_DIR, 'ml_models', 'price_optimization_model.pkl')
+            
+            # Nếu bạn dùng tên file mới thì đổi dòng trên thành:
+            # model_path = os.path.join(settings.BASE_DIR, 'ml_models', 'price_optimization_model_1.pkl')
+
             if not os.path.exists(model_path):
                 return Response({"error": "Chưa train model AI."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
             
             model = joblib.load(model_path)
 
             # 5. THIẾT LẬP KHOẢNG QUÉT GIÁ (SCAN RANGE)
-            # Chặn trên để tránh AI thử giá quá ảo (Business Rule)
             min_price = 50000
             
             if is_hot_match or importance == 5:
-                max_price = 1500000 # Trận Hot cho phép thử đến 1.5tr
+                max_price = 1500000 
             elif importance == 4:
                 max_price = 700000
             elif importance == 3:
                 max_price = 500000
             else:
-                max_price = 300000 # Trận yếu chỉ cho max 300k
+                max_price = 300000 
 
-            # Bước nhảy: 20k (để biểu đồ mịn hơn)
             price_range = range(min_price, max_price + 20000, 20000) 
 
-            # 6. VÒNG LẶP GIẢ LẬP (SIMULATION)
+            # 6. VÒNG LẶP GIẢ LẬP
             simulations = []
-            max_revenue_found = 0 # Để chuẩn hóa điểm số
+            max_revenue_found = 0 
+            estimators = model.estimators_ 
 
             for p in price_range:
-                # Input AI
                 features = np.array([[day_of_week, hour, is_hot_match, importance, p]])
                 
-                # Dự báo
-                pred_qty = int(model.predict(features)[0])
-                pred_qty = max(0, min(pred_qty, MAX_CAPACITY)) # Giới hạn bởi sức chứa
+                # Lấy dự báo từ 300 cây
+                tree_predictions = [tree.predict(features)[0] for tree in estimators]
+                
+                pred_qty_avg = np.mean(tree_predictions)
+                pred_std = np.std(tree_predictions)
+                
+                # --- SỬA CÔNG THỨC TẠI ĐÂY ---
+                # Tính độ lệch tương đối so với sức chứa sân (Relative Variance)
+                if MAX_CAPACITY > 0:
+                    variance_ratio = pred_std / MAX_CAPACITY
+                else:
+                    variance_ratio = 1
+                penalty_factor = 60 if MAX_CAPACITY < 2000 else 120
+                # Công thức mới: Phạt dựa trên % sai số so với sức chứa
+                # Hệ số phạt 300 nghĩa là: Nếu độ lệch > 33% sức chứa thì điểm về 0
+                # Ví dụ: Sân 1000, lệch 100 (10%) -> 100 - (0.1 * 300) = 70 điểm (Khá)
+                #        Sân 1000, lệch 300 (30%) -> 100 - (0.3 * 300) = 10 điểm (Thấp)
+
+                confidence_score = max(0, 100 - (variance_ratio * penalty_factor))
+
+                # -----------------------------
+
+                pred_qty = int(max(0, min(pred_qty_avg, MAX_CAPACITY)))
                 
                 revenue = pred_qty * p
                 fill_rate = (pred_qty / MAX_CAPACITY) * 100
@@ -474,32 +504,26 @@ class SuggestOptimalPriceView(APIView):
                     "price": p,
                     "revenue": revenue,
                     "sold": pred_qty,
-                    "fill_rate": round(fill_rate, 1)
+                    "fill_rate": round(fill_rate, 1),
+                    "confidence": round(confidence_score, 1) # Điểm số giờ sẽ hợp lý hơn
                 })
 
             # 7. CHẤM ĐIỂM TÌM PHƯƠNG ÁN TỐI ƯU (SCORING)
             best_option = None
             best_score = -9999
             
-            chart_data = [] # Dữ liệu trả về cho biểu đồ
+            chart_data = [] 
 
             for sim in simulations:
-                # Lọc dữ liệu biểu đồ: Chỉ lấy các điểm có thay đổi hoặc cách nhau 50k
-                # Hoặc lấy hết nếu muốn chi tiết (ở đây lấy hết vì range bước nhảy 20k là vừa đủ)
                 chart_data.append(sim)
-
-                # Bỏ qua những mức giá bán được 0 vé (Vô nghĩa)
                 if sim['sold'] <= 0: continue
 
-                # --- CÔNG THỨC CÂN BẰNG ---
-                # Score = (Doanh thu / Max_Doanh thu * 70) + (Tỷ lệ lấp đầy * 0.3)
-                # Mục đích: Ưu tiên tiền, nhưng nếu tiền ngang nhau thì chọn cái nào đông khách hơn.
-                
+                # Score = (Revenue_Score * 0.7) + (Fill_Rate_Score * 0.3)
                 rev_score = (sim['revenue'] / max_revenue_found) * 100 if max_revenue_found > 0 else 0
-                fill_score = sim['fill_rate'] # 0-100
+                fill_score = sim['fill_rate']
+                
                 final_score = (rev_score * 0.7) + (fill_score * 0.3)
-                # Phạt nặng nếu lấp đầy quá thấp (< 40%) -> Trừ 30 điểm
-                # Để tránh việc AI chọn giá cắt cổ bán cho 10 người
+                
                 if sim['fill_rate'] < 40:
                     final_score -= 30
 
@@ -509,11 +533,22 @@ class SuggestOptimalPriceView(APIView):
                     best_score = final_score
                     best_option = sim
 
-            # Fallback nếu không tìm được (vd toàn bộ dự báo = 0)
             if not best_option:
                 best_option = simulations[0]
 
-            # 8. TRẢ VỀ KẾT QUẢ
+            # 8. XỬ LÝ MESSAGE ĐỘ TIN CẬY (Để hiển thị cho Admin)
+            conf_val = best_option.get('confidence', 0)
+            if conf_val >= 75:
+                conf_level = "CAO (High)"
+                conf_msg = "AI khá  tự tin với phương án này (Dữ liệu đồng thuận cao)."
+            elif conf_val >= 50:
+                conf_level = "TRUNG BÌNH (Medium)"
+                conf_msg = "Dữ liệu có biến động, Admin nên cân nhắc thêm."
+            else:
+                conf_level = "THẤP (Low)"
+                conf_msg = "Dữ liệu bất thường (Outlier), AI không chắc chắn."
+
+            # 9. TRẢ VỀ KẾT QUẢ
             return Response({
                 "status": "success",
                 "match_info": {
@@ -529,9 +564,16 @@ class SuggestOptimalPriceView(APIView):
                     "estimated_revenue": best_option['revenue'],
                     "estimated_sold": best_option['sold'],
                     "fill_rate": best_option['fill_rate'],
-                    "reason": self.generate_reason(best_option, match.is_hot_match)
+                    "reason": self.generate_reason(best_option, match.is_hot_match),
+                    
+                    # --- THÔNG TIN THÊM CHO ADMIN ---
+                    "ai_reliability": {
+                        "score": conf_val,
+                        "level": conf_level,
+                        "message": conf_msg
+                    }
                 },
-                "chart_data": chart_data # Array chứa {price, revenue, sold, fill_rate}
+                "chart_data": chart_data 
             })
 
         except Exception as e:
@@ -539,14 +581,7 @@ class SuggestOptimalPriceView(APIView):
 
     def generate_reason(self, option, is_hot):
         rate = option['fill_rate']
-        
-        # Trả về mã code thay vì văn bản dài
-        if rate >= 80:
-            return "OPTIMAL_FILL"      # Lấp đầy tối đa
-        elif rate >= 60:
-            return "BALANCED"          # Cân bằng
-        elif is_hot:
-            return "PROFIT_MAX"        # Tối ưu lợi nhuận (cho trận Hot)
-        else:
-            return "SAFE_OPTION"       # Phương án an toàn (cho trận Ế)
-
+        if rate >= 80: return "OPTIMAL_FILL"
+        elif rate >= 60: return "BALANCED"
+        elif is_hot: return "PROFIT_MAX"
+        else: return "SAFE_OPTION"

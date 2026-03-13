@@ -154,9 +154,9 @@ from apps.tickets.models import SectionPrice, Section, Seat
 
 class AnalyzePromotionEffectivenessView(APIView):
     """
-    API Phân tích Khuyến mãi: Tối ưu giá (AI Pricing Strategist){"match_id":2}.
+    API Phân tích Khuyến mãi: Tối ưu giá (AI Pricing Strategist).
     Phiên bản: FINAL FIXED
-    Fix: Xử lý trường hợp Tier 4 còn 6 ngày nhưng dự báo quá lạc quan.
+    Input: {"match_id":2}
     """
     def post(self, request):
         match_id = request.data.get('match_id')
@@ -211,7 +211,7 @@ class AnalyzePromotionEffectivenessView(APIView):
             # ==========================================
             # 2. CHUẨN BỊ AI MODEL
             # ==========================================
-            model_path = os.path.join(settings.BASE_DIR, 'ml_models', 'price_optimization_model.pkl')
+            model_path = os.path.join(settings.BASE_DIR, 'ml_models', 'price_optimization_model_2.pkl')
             model = joblib.load(model_path)
 
             day = match.match_time.weekday()
