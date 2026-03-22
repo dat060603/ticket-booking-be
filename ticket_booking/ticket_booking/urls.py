@@ -32,7 +32,7 @@ urlpatterns = [
     path('api/promotions/', include('apps.promotions.urls')),
     path('api/returns/', include('apps.returns.urls')),
     path('api/reports/', include('apps.reports.urls')),
-     path('api/', include('apps.chatbot.urls')),
+    #  path('api/', include('apps.chatbot.urls')),
 
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
